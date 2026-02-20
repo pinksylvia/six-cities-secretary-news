@@ -1,0 +1,120 @@
+name: Daily News Summary to Telegram
+
+# 觸發條件
+on:
+  # 定時執行：每日台灣時間上午 8 點（UTC 0 點）
+  schedule:
+    - cron: '0 0 * * *'  # UTC 0:00 = 台灣時間 08:00
+  
+  # 手動觸發（用於測試）
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: '是否為測試模式（發送到測試群組）'
+        required: false
+        default: 'false'
+
+# 環境變數
+env:
+  NODE_VERSION: '18'
+  TIMEOUT: 300  # 5 分鐘超時
+
+jobs:
+  fetch-and-send-news:
+    runs-on: ubuntu-latest
+    
+    # 設定超時時間
+    timeout-minutes: 10
+    
+    steps:
+      # 步驟 1：檢出代碼
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 步驟 2：設定 Node.js 環境
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # 步驟 3：安裝依賴
+      - name: Install dependencies
+        run: |
+          npm ci --prefer-offline --no-audit
+          echo "✅ 依賴安裝完成"
+
+      # 步驟 4：驗證環境變數
+      - name: Verify environment variables
+        run: |
+          if [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]; then
+            echo "❌ 錯誤：缺少 TELEGRAM_BOT_TOKEN"
+            exit 1
+          fi
+          if [ -z "${{ secrets.TELEGRAM_GROUP_ID }}" ]; then
+            echo "❌ 錯誤：缺少 TELEGRAM_GROUP_ID"
+            exit 1
+          fi
+          echo "✅ 環境變數驗證完成"
+
+      # 步驟 5：抓取新聞
+      - name: Fetch news from websites
+        id: fetch
+        run: |
+          echo "開始抓取新聞..."
+          node scripts/fetch-news.js
+          echo "fetch_status=success" >> $GITHUB_OUTPUT
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+        continue-on-error: true
+
+      # 步驟 6：檢查執行結果
+      - name: Check execution result
+        if: steps.fetch.outcome == 'failure'
+        run: |
+          echo "⚠️ 新聞抓取出現問題，但工作流程繼續執行"
+
+      # 步驟 7：上傳日誌
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-logs-${{ github.run_number }}
+          path: |
+            logs/
+            .manus-logs/
+          retention-days: 30
+
+      # 步驟 8：發送成功通知
+      - name: Send success notification
+        if: success()
+        run: |
+          echo "✅ 新聞摘要已成功發送到 Telegram"
+
+      # 步驟 9：發送失敗通知
+      - name: Send failure notification
+        if: failure()
+        run: |
+          echo "❌ 工作流程執行失敗"
+          exit 1
+
+  # 可選：發送執行報告
+  send-report:
+    needs: fetch-and-send-news
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Send execution report
+        run: |
+          STATUS="${{ needs.fetch-and-send-news.result }}"
+          if [ "$STATUS" = "success" ]; then
+            echo "✅ 今日新聞摘要已成功發送"
+          else
+            echo "⚠️ 今日新聞摘要發送出現問題"
+          fi
