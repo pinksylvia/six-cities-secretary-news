@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * 完整的新聞抓取、篩選和 Telegram 發送腳本
+ * 完整的新聞抓取、篩選和 Telegram 發送腳本（整合 filter-rules-loader）
  * 用於 GitHub Actions 每日執行
  * 
  * 使用方法：
@@ -18,79 +18,86 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
-// ==================== 配置 ====================
+// 載入篩選規則載入器
+let filterRulesLoader;
+try {
+  filterRulesLoader = require('./filter-rules-loader');
+} catch (e) {
+  console.warn('⚠️ 無法載入 filter-rules-loader，將使用內置規則');
+  filterRulesLoader = null;
+}
 
-const CONFIG = {
-  // 新聞來源
-  NEWS_SOURCES: [
-    {
-      name: '聯合新聞網',
-      url: 'https://udn.com/news/index',
-      selector: 'article',
-      titleSelector: 'h2, h3',
-      summarySelector: 'p',
-      linkSelector: 'a'
+// ==================== 新聞來源配置 ====================
+
+const NEWS_SOURCES = [
+  {
+    name: '聯合新聞網',
+    url: 'https://udn.com/news/index',
+    selector: 'article',
+    titleSelector: 'h2, h3',
+    summarySelector: 'p',
+    linkSelector: 'a'
+  },
+  {
+    name: '自由時報',
+    url: 'https://www.ltn.com.tw/',
+    selector: 'article, .news-item',
+    titleSelector: 'h2, h3, .title',
+    summarySelector: 'p, .summary',
+    linkSelector: 'a'
+  },
+  {
+    name: '中時新聞網',
+    url: 'https://www.chinatimes.com/',
+    selector: '.news-item, article',
+    titleSelector: 'h2, h3',
+    summarySelector: 'p',
+    linkSelector: 'a'
+  }
+];
+
+// ==================== 預設篩選規則 ====================
+
+const DEFAULT_FILTER_RULES = {
+  filterRules: {
+    cities: {
+      values: ['台北', '新北', '桃園', '台中', '台南', '高雄'],
+      weight: 10
     },
-    {
-      name: '自由時報',
-      url: 'https://www.ltn.com.tw/',
-      selector: 'article, .news-item',
-      titleSelector: 'h2, h3, .title',
-      summarySelector: 'p, .summary',
-      linkSelector: 'a'
+    keywords: {
+      values: [
+        '秘書處', '秘書長', '市政府', '市長', '副市長',
+        '政策', '會議', '視察', '國際交流', '簽署',
+        '協議', '公告', '通知', '宣布', '發布'
+      ],
+      weight: 5
     },
-    {
-      name: '中時新聞網',
-      url: 'https://www.chinatimes.com/',
-      selector: '.news-item, article',
-      titleSelector: 'h2, h3',
-      summarySelector: 'p',
-      linkSelector: 'a'
+    excludeKeywords: {
+      values: [
+        '娛樂', '運動', '明星', '八卦', '股市', '房市',
+        '天氣', '寵物', '美食', '旅遊'
+      ],
+      weight: -100
+    },
+    categoryKeywords: {
+      categories: {
+        '秘書處業務': {
+          keywords: ['秘書處', '秘書長', '行政', '公務', '人事'],
+          weight: 3
+        },
+        '市政新聞': {
+          keywords: ['市長', '副市長', '市政', '政策', '會議'],
+          weight: 2
+        },
+        '國際交流': {
+          keywords: ['國際', '交流', '簽署', '協議', '友好'],
+          weight: 2
+        }
+      }
     }
-  ],
-
-  // 篩選規則
-  FILTER_RULES: {
-    // 必須包含的城市
-    cities: ['台北', '新北', '桃園', '台中', '台南', '高雄'],
-    
-    // 必須包含的關鍵字（任一即可）
-    keywords: [
-      '秘書處', '秘書長', '市政府',
-      '市長', '副市長', '局長',
-      '政策', '會議', '視察',
-      '國際交流', '簽署', '協議'
-    ],
-
-    // 排除的關鍵字（包含則排除）
-    excludeKeywords: [
-      '娛樂', '運動', '明星', '八卦',
-      '股市', '房市', '天氣', '寵物'
-    ],
-
-    // 評分權重
-    weights: {
-      city: 10,
-      keyword: 5,
-      category: 3
-    },
-
-    // 最低評分閾值
+  },
+  scoringRules: {
     minScore: 5
-  },
-
-  // Telegram 設定
-  TELEGRAM: {
-    timeout: 10000,
-    maxRetries: 3,
-    retryDelay: 1000
-  },
-
-  // 日誌設定
-  LOGGING: {
-    enabled: true,
-    dir: './logs',
-    level: 'info'  // debug, info, warn, error
   }
 };
 
@@ -120,7 +127,6 @@ class Logger {
 
     this.logs.push(logEntry);
 
-    // 控制台輸出
     const prefix = {
       debug: '🔍',
       info: 'ℹ️',
@@ -154,7 +160,115 @@ class Logger {
   }
 }
 
-const logger = new Logger(CONFIG.LOGGING);
+const logger = new Logger({ dir: './logs' });
+
+// ==================== 篩選規則管理 ====================
+
+/**
+ * 載入篩選規則
+ */
+function loadFilterRules() {
+  try {
+    if (filterRulesLoader) {
+      const rules = filterRulesLoader.loadFilterRules('./config/filter-rules.json');
+      logger.info('已從 filter-rules.json 載入篩選規則');
+      return rules;
+    }
+  } catch (error) {
+    logger.warn(`無法載入 filter-rules.json: ${error.message}`);
+  }
+
+  logger.info('使用預設篩選規則');
+  return DEFAULT_FILTER_RULES;
+}
+
+/**
+ * 計算新聞評分
+ */
+function calculateScore(news, rules) {
+  if (filterRulesLoader) {
+    return filterRulesLoader.calculateScore(news, rules);
+  }
+
+  // 備用實現
+  let score = 0;
+  const text = (news.title + ' ' + news.summary).toLowerCase();
+
+  const filterRules = rules.filterRules || {};
+
+  // 城市匹配
+  if (filterRules.cities && filterRules.cities.values) {
+    filterRules.cities.values.forEach(city => {
+      if (text.includes(city.toLowerCase())) {
+        score += filterRules.cities.weight || 10;
+      }
+    });
+  }
+
+  // 關鍵字匹配
+  if (filterRules.keywords && filterRules.keywords.values) {
+    filterRules.keywords.values.forEach(keyword => {
+      if (text.includes(keyword.toLowerCase())) {
+        score += filterRules.keywords.weight || 5;
+      }
+    });
+  }
+
+  // 排除關鍵字
+  if (filterRules.excludeKeywords && filterRules.excludeKeywords.values) {
+    for (const keyword of filterRules.excludeKeywords.values) {
+      if (text.includes(keyword.toLowerCase())) {
+        return 0;
+      }
+    }
+  }
+
+  return score;
+}
+
+/**
+ * 提取城市信息
+ */
+function extractCity(news, rules) {
+  if (filterRulesLoader) {
+    return filterRulesLoader.extractCity(news, rules);
+  }
+
+  const text = news.title + ' ' + news.summary;
+  const cities = rules.filterRules?.cities?.values || [];
+
+  for (const city of cities) {
+    if (text.includes(city)) {
+      return city;
+    }
+  }
+
+  return '其他';
+}
+
+/**
+ * 提取分類
+ */
+function extractCategory(news, rules) {
+  if (filterRulesLoader) {
+    return filterRulesLoader.extractCategory(news, rules);
+  }
+
+  const text = (news.title + ' ' + news.summary).toLowerCase();
+  const categoryKeywords = rules.filterRules?.categoryKeywords?.categories || {};
+
+  for (const [category, config] of Object.entries(categoryKeywords)) {
+    if (config.keywords) {
+      for (const keyword of config.keywords) {
+        if (text.includes(keyword.toLowerCase())) {
+          return category;
+        }
+      }
+    }
+  }
+
+  return '其他';
+}
 
 // ==================== 新聞抓取 ====================
 
@@ -176,7 +290,7 @@ async function fetchFromSource(source) {
     const articles = [];
 
     $(source.selector).each((i, el) => {
-      if (articles.length >= 50) return; // 限制每個源 50 條
+      if (articles.length >= 50) return;
 
       try {
         const title = $(el).find(source.titleSelector).first().text().trim();
@@ -213,11 +327,10 @@ async function fetchAllNews() {
 
   const allNews = [];
 
-  for (const source of CONFIG.NEWS_SOURCES) {
+  for (const source of NEWS_SOURCES) {
     const news = await fetchFromSource(source);
     allNews.push(...news);
     
-    // 避免請求過於頻繁
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
@@ -228,65 +341,30 @@ async function fetchAllNews() {
 // ==================== 新聞篩選 ====================
 
 /**
- * 計算新聞相關度評分
- */
-function calculateScore(news) {
-  let score = 0;
-  const text = (news.title + ' ' + news.summary).toLowerCase();
-
-  // 城市匹配
-  CONFIG.FILTER_RULES.cities.forEach(city => {
-    if (text.includes(city.toLowerCase())) {
-      score += CONFIG.FILTER_RULES.weights.city;
-    }
-  });
-
-  // 關鍵字匹配
-  CONFIG.FILTER_RULES.keywords.forEach(keyword => {
-    if (text.includes(keyword.toLowerCase())) {
-      score += CONFIG.FILTER_RULES.weights.keyword;
-    }
-  });
-
-  // 排除關鍵字
-  CONFIG.FILTER_RULES.excludeKeywords.forEach(keyword => {
-    if (text.includes(keyword.toLowerCase())) {
-      score = 0;
-    }
-  });
-
-  return score;
-}
-
-/**
- * 提取城市信息
- */
-function extractCity(news) {
-  const text = news.title + ' ' + news.summary;
-  for (const city of CONFIG.FILTER_RULES.cities) {
-    if (text.includes(city)) {
-      return city;
-    }
-  }
-  return '其他';
-}
-
-/**
  * 篩選相關新聞
  */
-function filterNews(allNews) {
+function filterNews(allNews, rules) {
   logger.info('開始篩選新聞...');
+
+  if (filterRulesLoader) {
+    const filtered = filterRulesLoader.filterNews(allNews, rules);
+    logger.info(`篩選完成，保留 ${filtered.length} 條相關新聞`);
+    return filtered;
+  }
+
+  // 備用實現
+  const minScore = rules.scoringRules?.minScore || 5;
 
   const filtered = allNews
     .map(news => ({
       ...news,
-      score: calculateScore(news),
-      city: extractCity(news),
-      category: '秘書處業務'
+      score: calculateScore(news, rules),
+      city: extractCity(news, rules),
+      category: extractCategory(news, rules)
     }))
-    .filter(news => news.score >= CONFIG.FILTER_RULES.minScore)
+    .filter(news => news.score >= minScore)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 50); // 最多 50 條
+    .slice(0, 50);
 
   logger.info(`篩選完成，保留 ${filtered.length} 條相關新聞`);
   return filtered;
@@ -315,13 +393,13 @@ function generateTelegramMessage(newsArray) {
 
   let newsCount = 0;
   Object.entries(grouped).forEach(([city, items]) => {
-    message += `<b>【${city}】</b>\n`;
+    message += `<b>【${city}】</b> (${items.length} 則)\n`;
     items.slice(0, 5).forEach((item) => {
       newsCount++;
       message += `${newsCount}. <b>${item.title.substring(0, 60)}</b>\n`;
       message += `   ${item.summary.substring(0, 80)}...\n`;
       message += `   🔗 <a href="${item.url}">閱讀全文</a>\n`;
-      message += `   📌 ${item.source}\n\n`;
+      message += `   📌 ${item.source} | 分類: ${item.category}\n\n`;
     });
   });
 
@@ -338,7 +416,7 @@ function generateTelegramMessage(newsArray) {
  */
 async function sendToTelegram(botToken, chatId, message, retryCount = 0) {
   try {
-    logger.debug(`正在發送訊息到 Telegram (嘗試 ${retryCount + 1}/${CONFIG.TELEGRAM.maxRetries})...`);
+    logger.debug(`正在發送訊息到 Telegram (嘗試 ${retryCount + 1}/3)...`);
 
     const response = await axios.post(
       `https://api.telegram.org/bot${botToken}/sendMessage`,
@@ -349,7 +427,7 @@ async function sendToTelegram(botToken, chatId, message, retryCount = 0) {
         disable_web_page_preview: false
       },
       {
-        timeout: CONFIG.TELEGRAM.timeout
+        timeout: 10000
       }
     );
 
@@ -362,8 +440,8 @@ async function sendToTelegram(botToken, chatId, message, retryCount = 0) {
   } catch (error) {
     logger.error(`發送失敗: ${error.message}`);
 
-    if (retryCount < CONFIG.TELEGRAM.maxRetries - 1) {
-      const delay = CONFIG.TELEGRAM.retryDelay * Math.pow(2, retryCount);
+    if (retryCount < 2) {
+      const delay = 1000 * Math.pow(2, retryCount);
       logger.warn(`等待 ${delay}ms 後重試...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return sendToTelegram(botToken, chatId, message, retryCount + 1);
@@ -390,7 +468,6 @@ async function saveToGoogleSheets(news) {
   try {
     logger.debug('正在儲存新聞到 Google Sheets...');
     // 實現 Google Sheets API 調用
-    // 這裡需要根據實際情況實現
     logger.info('新聞已儲存到 Google Sheets');
     return true;
   } catch (error) {
@@ -418,20 +495,24 @@ async function main() {
 
     logger.info('環境變數驗證完成');
 
-    // 步驟 1：抓取新聞
+    // 步驟 1：載入篩選規則
+    logger.info('正在載入篩選規則...');
+    const rules = loadFilterRules();
+
+    // 步驟 2：抓取新聞
     const allNews = await fetchAllNews();
 
     if (allNews.length === 0) {
       logger.warn('未抓取到任何新聞');
     }
 
-    // 步驟 2：篩選新聞
-    const filteredNews = filterNews(allNews);
+    // 步驟 3：篩選新聞
+    const filteredNews = filterNews(allNews, rules);
 
-    // 步驟 3：生成訊息
+    // 步驟 4：生成訊息
     const message = generateTelegramMessage(filteredNews);
 
-    // 步驟 4：發送到 Telegram
+    // 步驟 5：發送到 Telegram
     logger.info('正在發送到 Telegram...');
     const sent = await sendToTelegram(botToken, chatId, message);
 
@@ -439,7 +520,7 @@ async function main() {
       throw new Error('Telegram 發送失敗');
     }
 
-    // 步驟 5：儲存到 Google Sheets（可選）
+    // 步驟 6：儲存到 Google Sheets（可選）
     await saveToGoogleSheets(filteredNews);
 
     logger.info('========== 流程完成 ==========');

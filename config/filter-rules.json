@@ -1,0 +1,218 @@
+{
+  "version": "1.0.0",
+  "description": "台灣六都市政府秘書處新聞篩選規則配置",
+  "lastUpdated": "2026-02-19T08:00:00Z",
+  "filterRules": {
+    "cities": {
+      "description": "必須包含的城市名稱（任一即可）",
+      "values": [
+        "台北",
+        "新北",
+        "桃園",
+        "台中",
+        "台南",
+        "高雄"
+      ],
+      "weight": 10,
+      "required": true
+    },
+    "keywords": {
+      "description": "必須包含的關鍵字（任一即可）",
+      "values": [
+        "秘書處",
+        "秘書長",
+        "市政府",
+        "市長",
+        "副市長",
+        "局長",
+        "政策",
+        "會議",
+        "視察",
+        "國際交流",
+        "簽署",
+        "協議",
+        "公告",
+        "通知",
+        "宣布",
+        "發布",
+        "新聞稿",
+        "記者會",
+        "活動",
+        "典禮",
+        "儀式",
+        "頒獎",
+        "表揚"
+      ],
+      "weight": 5,
+      "required": true
+    },
+    "excludeKeywords": {
+      "description": "排除的關鍵字（包含則完全排除）",
+      "values": [
+        "娛樂",
+        "運動",
+        "明星",
+        "八卦",
+        "股市",
+        "房市",
+        "天氣",
+        "寵物",
+        "美食",
+        "旅遊",
+        "遊戲",
+        "電影",
+        "音樂",
+        "廣告",
+        "贊助",
+        "置入",
+        "商業"
+      ],
+      "weight": -100,
+      "required": false
+    },
+    "categoryKeywords": {
+      "description": "分類關鍵字（用於標籤分類）",
+      "categories": {
+        "秘書處業務": {
+          "keywords": [
+            "秘書處",
+            "秘書長",
+            "行政",
+            "公務",
+            "人事",
+            "組織",
+            "編制"
+          ],
+          "weight": 3
+        },
+        "市政新聞": {
+          "keywords": [
+            "市長",
+            "副市長",
+            "市政",
+            "政策",
+            "會議",
+            "宣布",
+            "發布"
+          ],
+          "weight": 2
+        },
+        "國際交流": {
+          "keywords": [
+            "國際",
+            "交流",
+            "簽署",
+            "協議",
+            "友好",
+            "合作",
+            "訪問"
+          ],
+          "weight": 2
+        },
+        "活動典禮": {
+          "keywords": [
+            "活動",
+            "典禮",
+            "儀式",
+            "記者會",
+            "頒獎",
+            "表揚",
+            "慶祝"
+          ],
+          "weight": 1
+        }
+      }
+    }
+  },
+  "scoringRules": {
+    "description": "評分規則配置",
+    "minScore": 5,
+    "maxScore": 100,
+    "scoringMethod": "weighted_sum",
+    "rules": [
+      {
+        "name": "城市匹配",
+        "condition": "包含任一城市名稱",
+        "points": 10,
+        "required": true
+      },
+      {
+        "name": "關鍵字匹配",
+        "condition": "包含任一關鍵字",
+        "points": 5,
+        "required": true
+      },
+      {
+        "name": "分類關鍵字",
+        "condition": "包含分類關鍵字",
+        "points": 1,
+        "required": false
+      },
+      {
+        "name": "排除關鍵字",
+        "condition": "包含排除關鍵字",
+        "points": -100,
+        "required": false
+      }
+    ]
+  },
+  "newsSourcesConfig": {
+    "description": "新聞來源配置",
+    "timeout": 10000,
+    "maxArticlesPerSource": 50,
+    "retryAttempts": 3,
+    "retryDelay": 1000
+  },
+  "telegramConfig": {
+    "description": "Telegram 發送配置",
+    "timeout": 10000,
+    "maxRetries": 3,
+    "retryDelay": 1000,
+    "messageFormat": "html",
+    "maxArticlesInMessage": 30,
+    "includeSource": true,
+    "includeCategory": true,
+    "includeScore": false
+  },
+  "loggingConfig": {
+    "description": "日誌配置",
+    "enabled": true,
+    "level": "info",
+    "directory": "./logs",
+    "maxFileSize": 10485760,
+    "retentionDays": 30
+  },
+  "examples": {
+    "description": "使用範例",
+    "example1": {
+      "title": "台北市秘書處發布新政策",
+      "summary": "台北市政府秘書處今日發布新的行政政策，加強市政透明度。",
+      "expectedScore": 15,
+      "explanation": "包含『台北』(10分) 和『秘書處』(5分)"
+    },
+    "example2": {
+      "title": "新北市長視察基層",
+      "summary": "新北市市長今日視察基層單位，了解民眾需求。",
+      "expectedScore": 15,
+      "explanation": "包含『新北』(10分) 和『市長』(5分)"
+    },
+    "example3": {
+      "title": "桃園市與日本城市簽署友好協議",
+      "summary": "桃園市政府秘書處今日與日本城市簽署友好協議，促進國際交流。",
+      "expectedScore": 20,
+      "explanation": "包含『桃園』(10分)、『秘書處』(5分) 和『簽署』(5分)"
+    },
+    "example4": {
+      "title": "台中市明星代言新產品",
+      "summary": "台中市一位知名明星代言新產品，引發關注。",
+      "expectedScore": 0,
+      "explanation": "包含『台中』(10分)，但包含『明星』排除詞，最終分數為 0"
+    }
+  },
+  "notes": {
+    "usage": "此檔案由 fetch-news.js 自動讀取，修改後無需重啟即可生效",
+    "modification": "可直接編輯此檔案修改篩選規則，建議每週檢查一次篩選效果",
+    "backup": "修改前建議備份此檔案，以便回復到之前的配置",
+    "version": "如果修改了規則，建議更新 version 欄位以追蹤變更"
+  }
+}
