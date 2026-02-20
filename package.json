@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "台灣六都市政府秘書處新聞自動追蹤系統",
   "main": "scripts/fetch-news.js",
+  "type": "module",
   "scripts": {
     "fetch": "node scripts/fetch-news.js",
     "test": "node scripts/test-telegram.js"

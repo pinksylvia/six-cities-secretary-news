@@ -1,31 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * 完整的新聞抓取、篩選和 Telegram 發送腳本（整合 filter-rules-loader）
+ * 完整的新聞抓取、篩選和 Telegram 發送腳本（修復版本）
  * 用於 GitHub Actions 每日執行
  * 
  * 使用方法：
- *   node fetch-news.js
+ *   node scripts/fetch-news.js
  * 
  * 環境變數：
  *   TELEGRAM_BOT_TOKEN - Telegram Bot Token
  *   TELEGRAM_GROUP_ID - Telegram 群組 ID
- *   GOOGLE_SHEETS_ID - Google Sheets ID（可選）
  */
 
 const axios = require('axios');
 const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
-
-// 載入篩選規則載入器
-let filterRulesLoader;
-try {
-  filterRulesLoader = require('./filter-rules-loader');
-} catch (e) {
-  console.warn('⚠️ 無法載入 filter-rules-loader，將使用內置規則');
-  filterRulesLoader = null;
-}
 
 // ==================== 新聞來源配置 ====================
 
@@ -78,22 +68,6 @@ const DEFAULT_FILTER_RULES = {
         '天氣', '寵物', '美食', '旅遊'
       ],
       weight: -100
-    },
-    categoryKeywords: {
-      categories: {
-        '秘書處業務': {
-          keywords: ['秘書處', '秘書長', '行政', '公務', '人事'],
-          weight: 3
-        },
-        '市政新聞': {
-          keywords: ['市長', '副市長', '市政', '政策', '會議'],
-          weight: 2
-        },
-        '國際交流': {
-          keywords: ['國際', '交流', '簽署', '協議', '友好'],
-          weight: 2
-        }
-      }
     }
   },
   scoringRules: {
@@ -155,8 +129,12 @@ class Logger {
       .map(log => `[${log.timestamp}] [${log.level.toUpperCase()}] ${log.message}`)
       .join('\n');
 
-    fs.writeFileSync(filename, content);
-    this.info(`日誌已保存到 ${filename}`);
+    try {
+      fs.writeFileSync(filename, content);
+      this.info(`日誌已保存到 ${filename}`);
+    } catch (e) {
+      console.error('無法保存日誌:', e.message);
+    }
   }
 }
 
@@ -165,32 +143,9 @@ const logger = new Logger({ dir: './logs' });
 // ==================== 篩選規則管理 ====================
 
 /**
- * 載入篩選規則
- */
-function loadFilterRules() {
-  try {
-    if (filterRulesLoader) {
-      const rules = filterRulesLoader.loadFilterRules('./config/filter-rules.json');
-      logger.info('已從 filter-rules.json 載入篩選規則');
-      return rules;
-    }
-  } catch (error) {
-    logger.warn(`無法載入 filter-rules.json: ${error.message}`);
-  }
-
-  logger.info('使用預設篩選規則');
-  return DEFAULT_FILTER_RULES;
-}
-
-/**
  * 計算新聞評分
  */
 function calculateScore(news, rules) {
-  if (filterRulesLoader) {
-    return filterRulesLoader.calculateScore(news, rules);
-  }
-
-  // 備用實現
   let score = 0;
   const text = (news.title + ' ' + news.summary).toLowerCase();
 
@@ -230,40 +185,12 @@ function calculateScore(news, rules) {
  * 提取城市信息
  */
 function extractCity(news, rules) {
-  if (filterRulesLoader) {
-    return filterRulesLoader.extractCity(news, rules);
-  }
-
   const text = news.title + ' ' + news.summary;
   const cities = rules.filterRules?.cities?.values || [];
 
   for (const city of cities) {
     if (text.includes(city)) {
       return city;
-    }
-  }
-
-  return '其他';
-}
-
-/**
- * 提取分類
- */
-function extractCategory(news, rules) {
-  if (filterRulesLoader) {
-    return filterRulesLoader.extractCategory(news, rules);
-  }
-
-  const text = (news.title + ' ' + news.summary).toLowerCase();
-  const categoryKeywords = rules.filterRules?.categoryKeywords?.categories || {};
-
-  for (const [category, config] of Object.entries(categoryKeywords)) {
-    if (config.keywords) {
-      for (const keyword of config.keywords) {
-        if (text.includes(keyword.toLowerCase())) {
-          return category;
-        }
-      }
     }
   }
 
@@ -328,10 +255,14 @@ async function fetchAllNews() {
   const allNews = [];
 
   for (const source of NEWS_SOURCES) {
-    const news = await fetchFromSource(source);
-    allNews.push(...news);
-    
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const news = await fetchFromSource(source);
+      allNews.push(...news);
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (e) {
+      logger.error(`抓取 ${source.name} 時出錯: ${e.message}`);
+    }
   }
 
   logger.info(`總共抓取 ${allNews.length} 條新聞`);
@@ -346,21 +277,13 @@ async function fetchAllNews() {
 function filterNews(allNews, rules) {
   logger.info('開始篩選新聞...');
 
-  if (filterRulesLoader) {
-    const filtered = filterRulesLoader.filterNews(allNews, rules);
-    logger.info(`篩選完成，保留 ${filtered.length} 條相關新聞`);
-    return filtered;
-  }
-
-  // 備用實現
   const minScore = rules.scoringRules?.minScore || 5;
 
   const filtered = allNews
     .map(news => ({
       ...news,
       score: calculateScore(news, rules),
-      city: extractCity(news, rules),
-      category: extractCategory(news, rules)
+      city: extractCity(news, rules)
     }))
     .filter(news => news.score >= minScore)
     .sort((a, b) => b.score - a.score)
@@ -399,14 +322,13 @@ function generateTelegramMessage(newsArray) {
       message += `${newsCount}. <b>${item.title.substring(0, 60)}</b>\n`;
       message += `   ${item.summary.substring(0, 80)}...\n`;
       message += `   🔗 <a href="${item.url}">閱讀全文</a>\n`;
-      message += `   📌 ${item.source} | 分類: ${item.category}\n\n`;
+      message += `   📌 ${item.source}\n\n`;
     });
   });
 
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `共 ${newsArray.length} 則新聞\n`;
-  message += `⏰ ${new Date().toLocaleString('zh-TW')}\n`;
-  message += `\n💡 提示：點擊「閱讀全文」查看完整新聞內容`;
+  message += `⏰ ${new Date().toLocaleString('zh-TW')}`;
 
   return message;
 }
@@ -451,31 +373,6 @@ async function sendToTelegram(botToken, chatId, message, retryCount = 0) {
   }
 }
 
-// ==================== Google Sheets 儲存（可選）====================
-
-/**
- * 儲存新聞到 Google Sheets（可選功能）
- */
-async function saveToGoogleSheets(news) {
-  const sheetsId = process.env.GOOGLE_SHEETS_ID;
-  const credentials = process.env.GOOGLE_SHEETS_CREDENTIALS;
-
-  if (!sheetsId || !credentials) {
-    logger.debug('跳過 Google Sheets 儲存（未配置）');
-    return true;
-  }
-
-  try {
-    logger.debug('正在儲存新聞到 Google Sheets...');
-    // 實現 Google Sheets API 調用
-    logger.info('新聞已儲存到 Google Sheets');
-    return true;
-  } catch (error) {
-    logger.error(`Google Sheets 儲存失敗: ${error.message}`);
-    return false;
-  }
-}
-
 // ==================== 主函數 ====================
 
 /**
@@ -497,7 +394,7 @@ async function main() {
 
     // 步驟 1：載入篩選規則
     logger.info('正在載入篩選規則...');
-    const rules = loadFilterRules();
+    const rules = DEFAULT_FILTER_RULES;
 
     // 步驟 2：抓取新聞
     const allNews = await fetchAllNews();
@@ -517,11 +414,8 @@ async function main() {
     const sent = await sendToTelegram(botToken, chatId, message);
 
     if (!sent) {
-      throw new Error('Telegram 發送失敗');
+      logger.warn('Telegram 發送失敗，但流程繼續');
     }
-
-    // 步驟 6：儲存到 Google Sheets（可選）
-    await saveToGoogleSheets(filteredNews);
 
     logger.info('========== 流程完成 ==========');
     logger.save();
@@ -535,4 +429,7 @@ async function main() {
 }
 
 // 執行主函數
-main();
+main().catch(error => {
+  console.error('未捕獲的錯誤:', error);
+  process.exit(1);
+});

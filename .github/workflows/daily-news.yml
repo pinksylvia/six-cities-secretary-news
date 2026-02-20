@@ -4,20 +4,20 @@ name: Daily News Summary to Telegram
 on:
   # 定時執行：每日台灣時間上午 8 點（UTC 0 點）
   schedule:
-    - cron: '0 0 * * *'  # UTC 0:00 = 台灣時間 08:00
+    - cron: '0 0 * * *' # UTC 0:00 = 台灣時間 08:00
   
   # 手動觸發（用於測試）
   workflow_dispatch:
     inputs:
       test_mode:
-        description: '是否為測試模式（發送到測試群組）'
+        description: '是否為測試模式'
         required: false
         default: 'false'
 
 # 環境變數
 env:
   NODE_VERSION: '18'
-  TIMEOUT: 300  # 5 分鐘超時
+  TIMEOUT: 300
 
 jobs:
   fetch-and-send-news:
@@ -69,8 +69,6 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
-          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         continue-on-error: true
 
       # 步驟 6：檢查執行結果
@@ -85,10 +83,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: execution-logs-${{ github.run_number }}
-          path: |
-            logs/
-            .manus-logs/
+          path: logs/
           retention-days: 30
+        continue-on-error: true
 
       # 步驟 8：發送成功通知
       - name: Send success notification
